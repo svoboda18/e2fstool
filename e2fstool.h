@@ -15,11 +15,11 @@
 #warning "dummy implementation for capability xattrs"
 #define VFS_CAP_U32 2
 struct vfs_cap_data {
-    __le32 magic_etc;
-    struct {
-        __le32 permitted;
-        __le32 inheritable;
-    } data[VFS_CAP_U32];
+	__le32 magic_etc;
+	struct {
+		__le32 permitted;
+		__le32 inheritable;
+	} data[VFS_CAP_U32];
 };
 #define cap_valid(x) ((x) >= 0)
 #endif
@@ -29,10 +29,10 @@ struct vfs_cap_data {
 #endif
 
 #ifndef XATTR_SELINUX_SUFFIX
-#define XATTR_SELINUX_SUFFIX  "selinux"
+#define XATTR_SELINUX_SUFFIX "selinux"
 #endif
 #ifndef XATTR_CAPS_SUFFIX
-#define XATTR_CAPS_SUFFIX     "capability"
+#define XATTR_CAPS_SUFFIX    "capability"
 #endif
 
 #define FILE_MODE_MASK 0x0FFF
@@ -68,7 +68,7 @@ static char *absolute_path(const char *file)
 #ifndef SVB_MINGW
 			sprintf(ret, "%s/%s", cwd, file);
 #else
-	        sprintf(ret, "%s\\%s", cwd, file);
+			sprintf(ret, "%s\\%s", cwd, file);
 #endif
 	} else
 		ret = strdup(file);
@@ -77,20 +77,20 @@ static char *absolute_path(const char *file)
 }
 
 #ifdef SVB_WIN32
-#define SYMLINK_ID	"!<symlink>\xff\xfe"
+#define SYMLINK_ID "!<symlink>\xff\xfe"
 #define SYMLINK_PAD "\x0"
 static int _symlink(char *target, const char *file)
 {
 	int retval, pad = 0;
 
 	FILE *lnk = fopen(absolute_path(file), "wb");
-    if (!lnk) {
+	if (!lnk) {
 		retval = errno;
 		fprintf(stderr, "Error creating %s\n", file);
 		goto end;
 	}
 
-    retval = fprintf(lnk, SYMLINK_ID);
+	retval = fprintf(lnk, SYMLINK_ID);
 	if (retval < 0) {
 		retval = errno;
 		fprintf(stderr, "Error writing to %s\n", file);
@@ -113,7 +113,7 @@ static int _symlink(char *target, const char *file)
 		goto err;
 	}
 
-	retval = fwrite(SYMLINK_PAD , 1, sizeof(SYMLINK_PAD), lnk);
+	retval = fwrite(SYMLINK_PAD, 1, sizeof(SYMLINK_PAD), lnk);
 
 	if (retval < 0) {
 		retval = errno;
@@ -129,7 +129,7 @@ static int _symlink(char *target, const char *file)
 err:
 	retval = fclose(lnk);
 	if (retval < 0)
-		retval |= errno;
+		retval = errno;
 end:
 	return retval;
 }

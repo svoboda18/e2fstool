@@ -1,6 +1,6 @@
 e2fstool
 =================
-- (advanced) Android ext4 image extractor tool with support for Windows.
+- (advanced) (Android) ext4 image extractor tool with support for Windows.
 
 ## Main features:
 - Extracts sparse images without conversion.
@@ -13,9 +13,9 @@ e2fstool
 * Clone this repo.
 * Build `e2fstool` with your desired gcc.
 * You will need have `libext2_com_err libext2fs libsparse libbase libz` sources prepared. (Note that `libbase` is only required for newer `libsparse` builds)
-  - In addition to that, for WIN32 targets, `libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll` must be present in your execution environment. (PATH)
+  - In addition to that, for WIN32 targets, and earlier `libbase` builds, `libgcc_s_seh-1.dll libstdc++-6.dll libwinpthread-1.dll` must be present in your execution environment. (PATH)
 * Run `e2fstool` for command line arguments usage.
 
 ## Credits:
 * All credits goes to the author (@svoboda18)
-* GNU e2fsprogs`
+* GNU e2fsprogs

@@ -50,7 +50,7 @@ static errcode_t ino_get_xattr(ext2_filsys fs, ext2_ino_t ino, const char *key, 
 			"while reading xattrs of inode %u", ino);
 		goto xattrs_close;
 	}
-    
+	
 xattrs_close:
 	close_retval = ext2fs_xattrs_close(&xhandle);
 	if (close_retval) {
@@ -98,7 +98,7 @@ static errcode_t ino_get_capabilities_xattr(ext2_filsys fs, ext2_ino_t ino,
 end:
 	*val = cap;
 
-    if (retval == EXT2_ET_EA_KEY_NOT_FOUND)
+	if (retval == EXT2_ET_EA_KEY_NOT_FOUND)
 		return 0;
 	else 
 		return retval;
@@ -110,6 +110,7 @@ static errcode_t ino_get_config(ext2_filsys fs, ext2_ino_t ino, struct ext2_inod
 	uint64_t cap;
 	size_t sel_len;
 	struct inode_params *params = (struct inode_params *)priv_data;
+	unsigned int is_root = path == (char *)params->mountpoint;
 	errcode_t retval = 0;
 	
 	retval = ino_get_selinux_xattr(fs, ino, (void **)&sel, &sel_len);
@@ -124,7 +125,7 @@ static errcode_t ino_get_config(ext2_filsys fs, ext2_ino_t ino, struct ext2_inod
 		return retval;
 	}
 
-	if (!strcmp(path, (char *) params->mountpoint))
+	if (is_root)
 		retval = fprintf(params->fsconfig, "/ %u %u %o capabilities=%lu\n", inode.i_uid, inode.i_gid, inode.i_mode & FILE_MODE_MASK, cap);
 	else
 		retval = fprintf(params->fsconfig, "%s %u %u %o capabilities=%lu\n", path,
@@ -133,13 +134,13 @@ static errcode_t ino_get_config(ext2_filsys fs, ext2_ino_t ino, struct ext2_inod
 		return errno;
 
 	if (sel) {
-		if (!strcmp(path, (char *) params->mountpoint))
+		if (is_root)
 			if (*path == '\0')
-				retval = fprintf(params->seconfig, "(/.*)? %s\n", sel);
+				retval = fprintf(params->seconfig, "(/.*)? %.*s\n", sel_len, sel);
 			else
-				retval = fprintf(params->seconfig, "/%s(/.*)? %s\n", path, sel);
+				retval = fprintf(params->seconfig, "/%s(/.*)? %.*s\n", path, sel_len, sel);
 		else
-			retval = fprintf(params->seconfig, "/%s %s\n", path, sel);
+			retval = fprintf(params->seconfig, "/%s %.*s\n", path, sel_len, sel);
 	}
 	if (retval < 0)
 		return errno;
@@ -263,11 +264,11 @@ end:
 }
 
 static int walk_dir(ext2_ino_t dir,
-		    int flags EXT2FS_ATTR((unused)),
-		    struct ext2_dir_entry *de,
-		    int offset EXT2FS_ATTR((unused)),
-		    int blocksize EXT2FS_ATTR((unused)),
-		    char *buf EXT2FS_ATTR((unused)), void *priv_data)
+			int flags EXT2FS_ATTR((unused)),
+			struct ext2_dir_entry *de,
+			int offset EXT2FS_ATTR((unused)),
+			int blocksize EXT2FS_ATTR((unused)),
+			char *buf EXT2FS_ATTR((unused)), void *priv_data)
 {
 	__u16 nlen, flen;
 	char *path;
@@ -278,15 +279,15 @@ static int walk_dir(ext2_ino_t dir,
 	
 	nlen = de->name_len & 0xff;
 	if (!strncmp(de->name, ".", nlen)
-	    || (!strncmp(de->name, "..", nlen)))
+		|| (!strncmp(de->name, "..", nlen)))
 		return 0;
 
-    flen = asprintf(&params->filename, "%s/%.*s", params->path, nlen,
-		     de->name);
+	flen = asprintf(&params->filename, "%s/%.*s", params->path, nlen,
+			de->name);
 	if (flen < 0) {
 		params->error = ENOMEM;
 		return -ENOMEM;
-    }
+	}
 	
 	if (asprintf(&path, "%s%.*s", params->out, flen,
 				params->filename) < 0) {
@@ -315,12 +316,11 @@ static int walk_dir(ext2_ino_t dir,
 		}
 		
 		retval = ino_get_config(params->fs, de->inode, inode, out, params);
+		free(out);
 		if (retval) {
 			com_err(__func__, retval, "while getting inode %u config", de->inode);
-			free(out);
 			goto err;
 		}
-		free(out);
 	}
 
 	if (dir == EXT2_ROOT_INO &&
@@ -362,7 +362,7 @@ static int walk_dir(ext2_ino_t dir,
 			}
 
 			retval = ext2fs_dir_iterate2(params->fs, de->inode, 0, NULL,
-						     walk_dir, params);
+							 walk_dir, params);
 			if (retval)
 				goto err;
 
@@ -463,7 +463,7 @@ static errcode_t walk_fs(ext2_filsys fs)
 	
 	retval = ext2fs_dir_iterate2(fs, EXT2_ROOT_INO, 0, NULL, walk_dir,
 				     &params);
-    if (retval) {
+	if (retval) {
 		com_err(prog_name, retval, "while interating file system\n");
 		params.error = retval;
 	}
@@ -489,7 +489,7 @@ int main(int argc, char *argv[])
 
 	while ((c = getopt (argc, argv, "c:em:")) != EOF) {
 		switch (c) {
-	    case 'c':
+		case 'c':
 			conf_dir = absolute_path(optarg);
 			android_configure = 1;
 			break;
@@ -540,15 +540,15 @@ int main(int argc, char *argv[])
 	}
 
 	retval = walk_fs(fs);
-    if (retval) {
+	if (retval) {
 		com_err(prog_name, retval, "while walking filesystem");
 		goto end;
 	}
 
 	fprintf(stdout, "Extracted filesystem to %s with %u inodes and %u blocks\n",
-			      out_dir, fs->super->s_inodes_count - fs->super->s_free_inodes_count,
-						   fs->super->s_blocks_count - fs->super->s_free_blocks_count -
-						   RESERVED_INODES_COUNT);
+			out_dir, fs->super->s_inodes_count - fs->super->s_free_inodes_count,
+				 fs->super->s_blocks_count - fs->super->s_free_blocks_count -
+				 RESERVED_INODES_COUNT);
 
 end:
 	retval = ext2fs_close_free(&fs);
