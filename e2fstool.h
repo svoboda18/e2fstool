@@ -43,7 +43,6 @@ struct inode_params {
 	ext2_filsys fs;
 	char *path;
 	char *filename;
-	char *out;
 	__u8 *mountpoint;
 	FILE *fsconfig;
 	FILE *seconfig;
@@ -81,22 +80,22 @@ static char *absolute_path(const char *file)
 #define SYMLINK_PAD "\x0"
 static int _symlink(char *target, const char *file)
 {
-	int retval, pad = 0;
+	int retval = 0, pad = 0;
 
 	FILE *lnk = fopen(absolute_path(file), "wb");
 	if (!lnk) {
-		retval = errno;
+		retval = -1;
 		fprintf(stderr, "Error creating %s\n", file);
 		goto end;
 	}
 
 	retval = fprintf(lnk, SYMLINK_ID);
 	if (retval < 0) {
-		retval = errno;
+		retval = -1;
 		fprintf(stderr, "Error writing to %s\n", file);
 		goto err;
 	}
-	
+
 	if (strchr(target, '/'))
 		pad = 1;
 
@@ -108,7 +107,7 @@ static int _symlink(char *target, const char *file)
 			retval = fprintf(lnk, "%c", *c++);
 
 	if (retval < 0) {
-		retval = errno;
+		retval = -1;
 		fprintf(stderr, "Error writing to %s\n", file);
 		goto err;
 	}
@@ -116,20 +115,20 @@ static int _symlink(char *target, const char *file)
 	retval = fwrite(SYMLINK_PAD, 1, sizeof(SYMLINK_PAD), lnk);
 
 	if (retval < 0) {
-		retval = errno;
+		retval = -1;
 		fprintf(stderr, "Error writing to %s\n", file);
 		goto err;
 	}
 
 	if (!SetFileAttributes(file, FILE_ATTRIBUTE_SYSTEM)) {
+		retval = -1;
 		fprintf(stderr, "Error setting attributes to %s\n", file);
-		retval = 1;
 	}
 
 err:
 	retval = fclose(lnk);
 	if (retval < 0)
-		retval = errno;
+		retval = -1;
 end:
 	return retval;
 }

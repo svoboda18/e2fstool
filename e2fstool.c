@@ -21,8 +21,8 @@ static int _symlink(char *target, const char *file);
 static void usage(int ret)
 {
 	fprintf(stderr, "%s [-c config_dir] [-m mountpoint]\n"
-					"\t img_file out_dir\n",
-					prog_name);
+			"\t img_file out_dir\n",
+			prog_name);
 	exit(ret);
 }
 
@@ -36,7 +36,7 @@ static errcode_t ino_get_xattr(ext2_filsys fs, ext2_ino_t ino, const char *key, 
 		com_err(__func__, retval, "while opening inode %u", ino);
 		return retval;
 	}
-	
+
 	retval = ext2fs_xattrs_read(xhandle);
 	if (retval) {
 		com_err(__func__, retval,
@@ -50,7 +50,7 @@ static errcode_t ino_get_xattr(ext2_filsys fs, ext2_ino_t ino, const char *key, 
 			"while reading xattrs of inode %u", ino);
 		goto xattrs_close;
 	}
-	
+
 xattrs_close:
 	close_retval = ext2fs_xattrs_close(&xhandle);
 	if (close_retval) {
@@ -67,7 +67,7 @@ static errcode_t ino_get_selinux_xattr(ext2_filsys fs, ext2_ino_t ino,
 	errcode_t retval;
 
 	retval = ino_get_xattr(fs, ino, "security." XATTR_SELINUX_SUFFIX, val, val_len);
-	
+
 	if (retval == EXT2_ET_EA_KEY_NOT_FOUND)
 		return 0;
 	else 
@@ -81,7 +81,7 @@ static errcode_t ino_get_capabilities_xattr(ext2_filsys fs, ext2_ino_t ino,
 	struct vfs_cap_data *cap_data;
 	size_t len;
 	uint64_t cap = 0;
-	
+
 	retval = ino_get_xattr(fs, ino, "security." XATTR_CAPS_SUFFIX, (void **)&cap_data, &len);
 	if (retval)
 		goto end;
@@ -104,7 +104,7 @@ end:
 		return retval;
 }
 
-static errcode_t ino_get_config(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode inode, char *path, void *priv_data)
+static errcode_t ino_get_config(ext2_ino_t ino, struct ext2_inode inode, char *path, void *priv_data)
 {
 	char *sel = NULL;
 	uint64_t cap;
@@ -112,14 +112,14 @@ static errcode_t ino_get_config(ext2_filsys fs, ext2_ino_t ino, struct ext2_inod
 	struct inode_params *params = (struct inode_params *)priv_data;
 	unsigned int is_root = path == (char *)params->mountpoint;
 	errcode_t retval = 0;
-	
-	retval = ino_get_selinux_xattr(fs, ino, (void **)&sel, &sel_len);
+
+	retval = ino_get_selinux_xattr(params->fs, ino, (void **)&sel, &sel_len);
 	if (retval) {
 		com_err(__func__, retval, "while reading root inode xattrs");
 		return retval;
 	}
 
-	retval = ino_get_capabilities_xattr(fs, ino, &cap);
+	retval = ino_get_capabilities_xattr(params->fs, ino, &cap);
 	if (retval) {
 		com_err(__func__, retval, "while reading root inode xattrs");
 		return retval;
@@ -198,7 +198,7 @@ static errcode_t ino_get_symlink_buf(ext2_filsys fs, ext2_ino_t ino, struct ext2
 	retval = _symlink(link_target, path);
 #endif
 	if (retval == -1) {
-		com_err(__func__, errno, "while creating symlink %s -> %s", link_target, path);
+		com_err(__func__, errno, "while creating symlink %s", path);
 		retval = errno;
 	}
 
@@ -217,7 +217,7 @@ static errcode_t ino_get_file_buf(ext2_filsys fs, ext2_ino_t ino, const char *pa
 	unsigned int got;
 	blk64_t blocksize = fs->blocksize;
 	errcode_t retval = 0, close_retval = 0;
-	
+
 	fd = open(path, O_WRONLY | O_APPEND | O_CREAT, 0644);
 	if (fd < 0) {
 		com_err(__func__, errno, "while creating file");
@@ -229,13 +229,13 @@ static errcode_t ino_get_file_buf(ext2_filsys fs, ext2_ino_t ino, const char *pa
 		com_err(__func__, retval, "while opening ext2 file");
 		goto end;
 	}
-	
+
 	retval = ext2fs_get_mem(blocksize, &buf);
 	if (retval) {
 		com_err(__func__, retval, "while allocating memory");
 		goto end;
 	}
-	
+
 	while (1) {
 		retval = ext2fs_file_read(e2_file, buf, blocksize, &got);
 		if (retval) {
@@ -276,7 +276,7 @@ static int walk_dir(ext2_ino_t dir,
 	struct inode_params *params = (struct inode_params *)priv_data;
 	errcode_t retval = 0;
 	int ret = 0;
-	
+
 	nlen = de->name_len & 0xff;
 	if (!strncmp(de->name, ".", nlen)
 		|| (!strncmp(de->name, "..", nlen)))
@@ -288,19 +288,19 @@ static int walk_dir(ext2_ino_t dir,
 		params->error = ENOMEM;
 		return -ENOMEM;
 	}
-	
-	if (asprintf(&path, "%s%.*s", params->out, flen,
+
+	if (asprintf(&path, "%s%.*s", out_dir, flen,
 				params->filename) < 0) {
 		params->error = ENOMEM;
 		goto end;
 	}
-	
+
 	retval = ext2fs_read_inode(params->fs, de->inode, &inode);
 	if (retval) {
 		com_err(__func__, retval, "while reading inode %u", de->inode);
 		goto err;
 	}
-	
+
 	if (android_configure) {
 		char *out;
 
@@ -314,8 +314,8 @@ static int walk_dir(ext2_ino_t dir,
 			params->error = ENOMEM;
 			goto err;
 		}
-		
-		retval = ino_get_config(params->fs, de->inode, inode, out, params);
+
+		retval = ino_get_config(de->inode, inode, out, params);
 		free(out);
 		if (retval) {
 			com_err(__func__, retval, "while getting inode %u config", de->inode);
@@ -325,7 +325,9 @@ static int walk_dir(ext2_ino_t dir,
 
 	if (dir == EXT2_ROOT_INO &&
 		!strncmp(de->name, "lost+found", nlen)) goto err;
-			
+
+	fprintf(stdout, "Extracting %s\n", params->filename);
+	fflush(stdout);
 
 	switch(inode.i_mode & LINUX_S_IFMT) {
 		case LINUX_S_IFCHR:
@@ -393,17 +395,16 @@ static errcode_t walk_fs(ext2_filsys fs)
 		.mountpoint = NULL,
 		.fsconfig = NULL,
 		.seconfig = NULL,
-		.out = out_dir,
 		.error = 0
 	};
 	errcode_t retval = 0;
-	
+
 	retval = ext2fs_read_inode(fs, EXT2_ROOT_INO, &inode);
 	if (retval) {
 		com_err(__func__, retval, "while reading root inode");
 		return retval;
 	}
-	
+
 #ifndef SVB_MINGW
 	retval = mkdir(absolute_path(out_dir), S_IRWXU | S_IRWXG | S_IRWXO);
 #else
@@ -417,19 +418,20 @@ static errcode_t walk_fs(ext2_filsys fs)
 	if (android_configure) {
 		if (mountpoint)
 			params.mountpoint = mountpoint;
+		else if (fs->super->s_last_mounted &&
+			*fs->super->s_last_mounted != '\0')
+			params.mountpoint = fs->super->s_last_mounted;
 		else if (fs->super->s_volume_name)
 			params.mountpoint = fs->super->s_volume_name;
-		else if (fs->super->s_last_mounted)
-			params.mountpoint = fs->super->s_last_mounted;
 		else
 			params.mountpoint = (__u8 *)out_dir;
-		
+
 		if (*params.mountpoint == '/') ++params.mountpoint;
-		
+
 #ifndef SVB_MINGW
-		retval = mkdir(absolute_path(conf_dir), S_IRWXU | S_IRWXG | S_IRWXO);
+		retval = mkdir(conf_dir, S_IRWXU | S_IRWXG | S_IRWXO);
 #else
-		retval = _mkdir(absolute_path(conf_dir));
+		retval = _mkdir(conf_dir);
 #endif
 		if (retval == -1 && errno != EEXIST) {
 			fprintf(stderr, "Unexpected errror while creating %s\n", conf_dir);
@@ -440,7 +442,7 @@ static errcode_t walk_fs(ext2_filsys fs)
 			return ENOMEM;
 		if (asprintf(&sec, "%s/se_config.fs", conf_dir) < 0)
 			return ENOMEM;
-		
+
 		params.fsconfig = fopen(fsc, "w");
 		if (!params.fsconfig) {
 			fprintf(stderr, "Unexpected errror while opening %s\n", fsc);
@@ -453,20 +455,18 @@ static errcode_t walk_fs(ext2_filsys fs)
 			params.error = errno;
 			goto fsclose;
 		}
-		
-		retval = ino_get_config(fs, EXT2_ROOT_INO, inode, (char *)params.mountpoint, &params);
+
+		retval = ino_get_config(EXT2_ROOT_INO, inode, (char *)params.mountpoint, &params);
 		if (retval) {
 			com_err(__func__, retval, "while getting root inode config");
 			goto end;
 		}
 	}
-	
+
 	retval = ext2fs_dir_iterate2(fs, EXT2_ROOT_INO, 0, NULL, walk_dir,
 				     &params);
-	if (retval) {
+	if (retval)
 		com_err(prog_name, retval, "while interating file system\n");
-		params.error = retval;
-	}
 
 end:
 	if (android_configure)
@@ -484,7 +484,7 @@ int main(int argc, char *argv[])
 	io_manager io_mgr;
 	ext2_filsys fs = NULL;
 	errcode_t retval = 0;
-	
+
 	add_error_table(&et_ext2_error_table);
 
 	while ((c = getopt (argc, argv, "c:em:")) != EOF) {
@@ -515,7 +515,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Expected directory after options\n");
 		usage(EXIT_FAILURE);
 	}
-	
+
 	out_dir = strdup(argv[optind++]);
 
 	if (optind < argc) {
@@ -557,7 +557,7 @@ end:
 				"while writing superblocks");
 		exit(EXIT_FAILURE);
 	}
-	
+
 	remove_error_table(&et_ext2_error_table);
 	return 0;
 }
