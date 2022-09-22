@@ -8,18 +8,23 @@
 
 #include "e2fstool.h"
 
-const char * prog_name = "e2fstool";
-char *in_file;
-char *out_dir;
-char *conf_dir;
+static ext2_filsys fs = NULL;
+static struct ext2fs_numeric_progress_struct progress;
+
+const char *prog_name = "e2fstool";
+char *in_file = NULL;
+char *out_dir = NULL;
+char *conf_dir = NULL;
 __u8 *mountpoint = NULL;
-int android_configure;
-int android_sparse_file = 1;
+unsigned int android_configure = 0;
+unsigned int android_sparse_file = 1;
+unsigned int quiet = 0;
+unsigned int verbose = 0;
 
 void usage(int ret)
 {
     fprintf(stderr, "%s [-c config_dir] [-m mountpoint]\n"
-            "\t img_file out_dir\n",
+            "\t [-b blocksize] [-hqlvV] filename directory\n",
             prog_name);
     exit(ret);
 }
@@ -61,42 +66,39 @@ xattrs_close:
 errcode_t ino_get_selinux_xattr(ext2_filsys fs, ext2_ino_t ino,
                void **val, size_t *val_len)
 {
-    errcode_t retval;
+    errcode_t retval = ino_get_xattr(fs, ino, "security." XATTR_SELINUX_SUFFIX, val, val_len);
 
-    retval = ino_get_xattr(fs, ino, "security." XATTR_SELINUX_SUFFIX, val, val_len);
-
-    if (retval == EXT2_ET_EA_KEY_NOT_FOUND)
-        return 0;
-    else
-        return retval;
+    return retval == EXT2_ET_EA_KEY_NOT_FOUND ? 0 : retval;
 }
 
 errcode_t ino_get_capabilities_xattr(ext2_filsys fs, ext2_ino_t ino,
-               uint64_t *val)
+               uint64_t *cap)
 {
     errcode_t retval;
-    struct vfs_cap_data *cap_data;
-    size_t len;
-    uint64_t cap = 0;
+    struct vfs_cap_data *cap_data = NULL;
+    size_t len = 0;
+
+    assert(cap);
+    *cap = 0;
 
     retval = ino_get_xattr(fs, ino, "security." XATTR_CAPS_SUFFIX, (void **)&cap_data, &len);
     if (retval) {
         goto end;
     }
 
-    if (cap_data->magic_etc & VFS_CAP_REVISION) {
-        cap = ((uint64_t)(cap_data->data[1].permitted) << 32 | (uint64_t)cap_data->data[0].permitted);
-    } else {
+    if (len == XATTR_CAPS_SZ &&
+        cap_data &&
+        cap_data->magic_etc & VFS_CAP_REVISION) {
+        *cap = cap_data->data[1].permitted;
+        *cap <<= 32;
+        *cap |= cap_data->data[0].permitted;
+        *cap &= VFS_CAP_FLAGS_MASK;
+    } else if (cap_data) {
         fprintf(stderr, "%s: Unknown capabilities revision 0x%x\n", __func__, cap_data->magic_etc & VFS_CAP_REVISION_MASK);
     }
 
 end:
-    *val = cap;
-
-    if (retval == EXT2_ET_EA_KEY_NOT_FOUND)
-        return 0;
-    else
-        return retval;
+    return retval == EXT2_ET_EA_KEY_NOT_FOUND ? 0 : retval;
 }
 
 errcode_t ino_get_config(ext2_ino_t ino, struct ext2_inode inode, char *path, void *priv_data)
@@ -106,62 +108,52 @@ errcode_t ino_get_config(ext2_ino_t ino, struct ext2_inode inode, char *path, vo
     size_t ctx_len;
     uint64_t cap;
     struct inode_params *params = (struct inode_params *)priv_data;
-    unsigned char is_root = (path == (char *)params->mountpoint);
     errcode_t retval = 0;
 
     contexts = fopen(params->se_path, "a");
-    if (!contexts) {
-        params->error = errno;
-        return -1;
-    }
+    if (!contexts)
+        goto end;
 
     filesystem = fopen(params->fs_path, "a");
     if (!filesystem) {
-        params->error = errno;
         retval = -1;
         goto err;
     }
 
     retval = ino_get_selinux_xattr(params->fs, ino, (void **)&ctx, &ctx_len);
-    if (retval) {
+    if (retval)
         return retval;
-    }
 
     retval = ino_get_capabilities_xattr(params->fs, ino, &cap);
-    if (retval) {
+    if (retval)
         return retval;
-    }
 
-    if (is_root) {
-        retval = fprintf(filesystem, "/ %u %u %o capabilities=%lu\n", inode.i_uid, inode.i_gid, inode.i_mode & FILE_MODE_MASK, cap);
+
+    if (ino == EXT2_ROOT_INO) {
+        fprintf(filesystem, "/ %u %u %o capabilities=%lu\n", inode.i_uid, inode.i_gid, inode.i_mode & FILE_MODE_MASK, cap);
     } else {
-        retval = fprintf(filesystem, "%s %u %u %o capabilities=%lu\n", path, inode.i_uid, inode.i_gid, inode.i_mode & FILE_MODE_MASK, cap);
-    }
-    if (retval < 0) {
-        params->error = errno;
-        return  -1;
+        fprintf(filesystem, "%s %u %u %o capabilities=%lu\n", path, inode.i_uid, inode.i_gid, inode.i_mode & FILE_MODE_MASK, cap);
     }
 
     if (ctx) {
-        if (is_root) {
-            if (*path == '\0') {
-                retval = fprintf(contexts, "(/.*)? %.*s\n", ctx_len, ctx);
-            } else {
-                retval = fprintf(contexts, "/%s(/.*)? %.*s\n", path, ctx_len, ctx);
-            }
+        if (ino == EXT2_ROOT_INO) {
+            path[0] ? fprintf(contexts, "(/.*)? %.*s\n", ctx_len, ctx)
+                    : fprintf(contexts, "/%s(/.*)? %.*s\n", path, ctx_len, ctx);
         } else {
-            retval = fprintf(contexts, "/%s %.*s\n", path, ctx_len, ctx);
+            fprintf(contexts, "/%s %.*s\n", path, ctx_len, ctx);
         }
-    }
-    if (retval < 0) {
-        params->error = errno;
-        return -1;
     }
 
     fclose(filesystem);
 err:
     fclose(contexts);
-    return retval == -1 ? -1 : 0;
+end:
+    if (retval)
+#define ERROR_MESSAGE "while getting config for inode %u"
+        retval != -1 ? com_err(__func__, retval, ERROR_MESSAGE, ino)
+                     : fprintf(stderr, "%s: %s" ERROR_MESSAGE, __func__, strerror(errno), ino);
+#undef ERROR_MESSAGE
+    return retval;
 }
 
 errcode_t ino_extract_symlink(ext2_filsys fs, ext2_ino_t ino, struct ext2_inode *inode,
@@ -219,7 +211,7 @@ end:
     return retval;
 }
 
-errcode_t ino_extract_regfile(ext2_filsys fs, ext2_ino_t ino, const char *path)
+errcode_t ino_extract_regular(ext2_filsys fs, ext2_ino_t ino, const char *path)
 {
     ext2_file_t e2_file;
     struct ext2_inode inode;
@@ -265,7 +257,7 @@ errcode_t ino_extract_regfile(ext2_filsys fs, ext2_ino_t ino, const char *path)
         while (got) {
             nbytes = write(fd, buf, got);
             if (nbytes < 0) {
-                if (errno == EINTR) {
+                if (errno & (EINTR | EAGAIN)) {
                     continue;
                 }
                 com_err(__func__, errno, "while writing file");
@@ -334,10 +326,10 @@ int walk_dir(ext2_ino_t dir,
     if (android_configure) {
         char *config_path = NULL;
 
-        retval = (*params->mountpoint == '\0')
-              ? asprintf(&config_path, "%.*s", filename_len - 1, params->filename + 1)
-              : asprintf(&config_path, "%s%.*s", params->mountpoint, filename_len, params->filename);
-        if (retval < 0) {
+        retval = !params->mountpoint[0]
+               ? asprintf(&config_path, "%.*s", filename_len - 1, params->filename + 1)
+               : asprintf(&config_path, "%s%.*s", params->mountpoint, filename_len, params->filename);
+        if (retval < 0 || !config_path) {
             params->error = EXT2_ET_NO_MEMORY;
             goto err;
         }
@@ -345,19 +337,17 @@ int walk_dir(ext2_ino_t dir,
         retval = ino_get_config(de->inode, inode, config_path, params);
         free(config_path);
 
-        if (retval) {
-#define ERROR_MESSAGE "while getting config for inode %u"
-            retval != -1 ? com_err(__func__, retval, ERROR_MESSAGE, de->inode)
-                         : fprintf(stderr, "%s: %s" ERROR_MESSAGE, __func__, strerror(params->error), de->inode);
+        if (retval)
             goto err;
-#undef ERROR_MESSAGE
-        }
     }
 
     if (dir == EXT2_ROOT_INO &&
         !strncmp(de->name, "lost+found", name_len)) goto err;
 
-    fprintf(stdout, "Extracting %s\n", params->filename + 1);
+    if (!quiet && verbose)
+        fprintf(stdout, "Extracting %s\n", params->filename + 1);
+    else if (!quiet)
+        ext2fs_numeric_progress_update(params->fs, &progress, de->inode);
 
     switch(inode.i_mode & LINUX_S_IFMT) {
         case LINUX_S_IFCHR:
@@ -375,7 +365,7 @@ int walk_dir(ext2_ino_t dir,
             break;
 #endif
         case LINUX_S_IFREG:
-            retval = ino_extract_regfile(params->fs, de->inode, output_file);
+            retval = ino_extract_regular(params->fs, de->inode, output_file);
             if (retval) {
                 goto err;
             }
@@ -400,7 +390,7 @@ int walk_dir(ext2_ino_t dir,
             params->filename = cur_filename;
             break;
         default:
-            fprintf(stderr, "%s: warning: unknown entry \"%s\" (%x)", __func__, params->filename, inode.i_mode & LINUX_S_IFMT);
+            fprintf(stderr, "%s: warning: unknown entry \"%s\" (%x)\n", __func__, params->filename, inode.i_mode & LINUX_S_IFMT);
     }
 
 err:
@@ -430,7 +420,7 @@ errcode_t walk_fs(ext2_filsys fs)
         return retval;
     }
 
-    retval = mkdir(out_dir, S_IRWXU | S_IRWXG | S_IRWXO);
+    retval = mkdir(out_dir, inode.i_mode);
     if (retval == -1 && errno != EEXIST) {
         fprintf(stderr, "%s: %s while creating %s\n", __func__, strerror(errno), out_dir);
         return errno;
@@ -439,9 +429,9 @@ errcode_t walk_fs(ext2_filsys fs)
     if (android_configure) {
         if (mountpoint)
             params.mountpoint = mountpoint;
-        else if (*fs->super->s_last_mounted != '\0')
+        else if (fs->super->s_last_mounted[0])
             params.mountpoint = fs->super->s_last_mounted;
-        else if (*fs->super->s_volume_name != '\0')
+        else if (fs->super->s_volume_name[0])
             params.mountpoint = fs->super->s_volume_name;
         else
             params.mountpoint = (__u8 *)out_dir;
@@ -450,7 +440,7 @@ errcode_t walk_fs(ext2_filsys fs)
 
         retval = mkdir(conf_dir, S_IRWXU | S_IRWXG | S_IRWXO);
         if (retval == -1 && errno != EEXIST) {
-            fprintf(stderr, "%s while creating %s\n", strerror(errno), conf_dir);
+            fprintf(stderr, "%s: %s while creating %s\n", __func__, strerror(errno), conf_dir);
             return errno;
         }
 
@@ -459,44 +449,67 @@ errcode_t walk_fs(ext2_filsys fs)
             com_err(__func__, EXT2_ET_NO_MEMORY, "while configuring config paths");
             return 1;
         }
+
+        unlink(params.fs_path);
+        unlink(params.se_path);
+
         retval = ino_get_config(EXT2_ROOT_INO, inode, (char *)params.mountpoint, &params);
-        if (retval) {
-            com_err(__func__, retval, "while getting root inode config");
+        if (retval)
             goto end;
-        }
     }
+
+    if (!quiet && !verbose)
+        ext2fs_numeric_progress_init(fs, &progress,
+                     "Extracting filesystem inodes: ",
+                     fs->super->s_inodes_count - fs->super->s_free_inodes_count - RESERVED_INODES_COUNT);
 
     retval = ext2fs_dir_iterate2(fs, EXT2_ROOT_INO, 0, NULL, walk_dir,
                      &params);
     if (retval) {
         com_err(prog_name, retval != -1 ? retval : params.error, "while interating file system\n");
     }
+
+    if (!quiet && !verbose)
+        ext2fs_numeric_progress_close(fs, &progress, "done\n");
 end:
     free(params.fs_path);
     free(params.se_path);
+
     return retval;
 }
 
 int main(int argc, char *argv[])
 {
-    int c;
-    io_manager io_mgr;
-    ext2_filsys fs = NULL;
+    int c, show_version_only = 0, ls = 0;
+    char *image = NULL;
+    io_manager io_mgr = unix_io_manager;
     errcode_t retval = 0;
-    unsigned int block_size = 0;
+    unsigned int b, blocksize = 0;
 
     add_error_table(&et_ext2_error_table);
 
-    while ((c = getopt (argc, argv, "b:c:em:")) != EOF)
+    while ((c = getopt (argc, argv, "b:c:ehm:qlvV")) != EOF) {
         switch (c) {
         case 'b':
-            block_size = strtoul(optarg, NULL, 0);
+            blocksize = parse_num_blocks2(optarg, -1);
+            b = (blocksize > 0) ? blocksize : -blocksize;
+            if (b < EXT2_MIN_BLOCK_SIZE ||
+                b > EXT2_MAX_BLOCK_SIZE) {
+                com_err(prog_name, 0,
+                    "invalid block size - %s", optarg);
+                exit(EXIT_FAILURE);
+            }
+            if (blocksize > 4096)
+                fprintf(stderr, "Warning: blocksize %d not "
+                          "usable on most systems.\n",
+                    blocksize);
+            break;
         case 'c':
-            conf_dir = optarg;
-            android_configure = 1;
+            conf_dir = strdup(optarg);
+            ++android_configure;
             break;
         case 'e':
-            android_sparse_file = 0;
+            --android_sparse_file;
             break;
         case 'm':
             if (*optarg != '/') {
@@ -505,53 +518,139 @@ int main(int argc, char *argv[])
             }
             mountpoint = (__u8 *)strdup(optarg);
             break;
+        case 'h':
+            usage(EXIT_SUCCESS);
+        case 'q':
+            ++quiet;
+            break;
+        case 'l':
+            ++ls;
+            break;
+        case 'v':
+            ++verbose;
+            break;
+        case 'V':
+            ++show_version_only;
+            break;
         default:
             usage(EXIT_FAILURE);
         }
-
-    if (optind >= argc) {
-        fprintf(stderr, "Expected filename after options\n");
-        usage(EXIT_FAILURE);
     }
 
-    in_file = strdup(argv[optind++]);
+    if (!show_version_only) {
+        if (optind >= argc) {
+            fprintf(stderr, "Expected filename after options\n");
+            usage(EXIT_FAILURE);
+        }
 
-    if (optind >= argc) {
-        fprintf(stderr, "Expected directory after options\n");
-        usage(EXIT_FAILURE);
+        image = in_file = strdup(argv[optind++]);
+
+        if (!ls) {
+            if (optind >= argc) {
+                fprintf(stderr, "Expected directory after options\n");
+                usage(EXIT_FAILURE);
+            }
+
+            out_dir = strdup(argv[optind++]);
+
+            if (optind < argc) {
+                fprintf(stderr, "Unexpected argument: %s\n", argv[optind]);
+                usage(EXIT_FAILURE);
+            }
+        }
     }
 
-    out_dir = strdup(argv[optind++]);
+    if (!quiet || show_version_only)
+        fprintf (stderr, "e2fstool %s (%s)\n\n", E2FSTOOL_VERSION,
+             E2FSTOOL_DATE);
 
-    if (optind < argc) {
-        fprintf(stderr, "Unexpected argument: %s\n", argv[optind]);
-        usage(EXIT_FAILURE);
+    if (show_version_only) {
+        fprintf(stderr, "Using %s\n",
+            error_message(EXT2_ET_BASE));
+        exit(EXIT_SUCCESS);
+    }
+
+    if (!quiet) {
+        fprintf(stderr, "Opening image file");
+        if (blocksize)
+            fprintf(stderr, " with blocksize of %u", blocksize);
+        fputs(": ", stderr);
     }
 
     if (android_sparse_file) {
-        io_mgr = sparse_io_manager;
-        if (asprintf(&in_file, "(%s)", in_file) == -1) {
-            fprintf(stderr, "Failed to allocate file name\n");
+        ext2fs_struct_stat st;
+        int in = open(in_file, O_RDONLY);
+        if (in == -1) {
+            fprintf(stderr, "%s: %s while opening %s\n", prog_name, strerror(errno), in_file);
             exit(EXIT_FAILURE);
         }
-    } else
-        io_mgr = unix_io_manager;
 
-    retval = ext2fs_open(in_file, EXT2_FLAG_RW, 0, block_size, io_mgr, &fs);
+        retval = ext2fs_fstat(in, &st);
+        if (retval) {
+            fprintf(stderr, "%s: %s while stating %s\n", prog_name, strerror(errno), in_file);
+            exit(EXIT_FAILURE);
+        }
+
+        if (st.st_size > SPARSE_MAX_IN_SIZE) {
+            struct sparse_file* s;
+            int new;
+
+            s = sparse_file_import(in, 1, 0);
+            if (!s) {
+                fprintf(stderr, "%s: %s while importing %s\n", prog_name, strerror(errno), in_file);
+                exit(EXIT_FAILURE);
+            }
+
+            new = open(SPARSE_RAW_TEMP_NAME, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (in == -1) {
+                fprintf(stderr, "%s: %s while creating raw %s\n", prog_name, strerror(errno), in_file);
+                exit(EXIT_FAILURE);
+            }
+
+            if (sparse_file_write(s, new, 0, 0, 0) < 0) {
+                fprintf(stderr, "%s: %s while writing raw %s\n", prog_name, strerror(errno), in_file);
+                exit(EXIT_FAILURE);
+            }
+
+            sparse_file_destroy(s);
+            close(new);
+
+            in_file = SPARSE_RAW_TEMP_NAME;
+        } else {
+            io_mgr = sparse_io_manager;
+            if (asprintf(&in_file, "(%s)", in_file) == -1) {
+                fprintf(stderr, "Failed to allocate file name\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        close(in);
+    }
+
+    retval = ext2fs_open(in_file, EXT2_FLAG_64BITS | EXT2_FLAG_EXCLUSIVE |
+                                  EXT2_FLAG_THREADS  | EXT2_FLAG_PRINT_PROGRESS, 0, blocksize, io_mgr, &fs);
     if (retval) {
-        com_err(prog_name, retval, "while opening file %s", in_file);
+        fputs("\n\n", stderr);
+        com_err(prog_name, retval, "while opening file %s", image);
         exit(EXIT_FAILURE);
     }
 
-    retval = walk_fs(fs);
-    if (retval)
+    fputs("done\n", stderr);
+
+    if (verbose || ls) {
+        list_super2(fs->super, stderr);
+        fprintf(stderr, "\n");
+    }
+    if (ls)
         goto end;
 
-    fprintf(stdout, "Extracted filesystem to %s with %u inodes and %u blocks\n",
-            out_dir, fs->super->s_inodes_count - fs->super->s_free_inodes_count,
-                     fs->super->s_blocks_count - fs->super->s_free_blocks_count -
-                     RESERVED_INODES_COUNT);
+    retval = walk_fs(fs);
+	if (retval)
+        goto end;
 
+    fprintf(stdout, "\nWritten %u inodes (%u blocks) to \"%s\"\n",
+            fs->super->s_inodes_count - fs->super->s_free_inodes_count,
+            fs->super->s_blocks_count - fs->super->s_free_blocks_count -
+            RESERVED_INODES_COUNT, out_dir);
 end:
     retval = ext2fs_close_free(&fs);
     if (retval) {
@@ -560,6 +659,11 @@ end:
         exit(EXIT_FAILURE);
     }
 
+    free(image);
+    free(out_dir);
+    free(conf_dir);
+    free(mountpoint);
+    unlink(SPARSE_RAW_TEMP_NAME);
     remove_error_table(&et_ext2_error_table);
-    return 0;
+    return EXIT_SUCCESS;
 }
