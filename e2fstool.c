@@ -24,7 +24,7 @@ unsigned int verbose = 0;
 void usage(int ret)
 {
     fprintf(stderr, "%s [-c config_dir] [-m mountpoint]\n"
-            "\t [-b blocksize] [-hqlvV] filename directory\n",
+            "\t [-b blocksize] [-hqlvV] filename [directory]\n",
             prog_name);
     exit(ret);
 }
@@ -148,10 +148,14 @@ errcode_t ino_get_config(ext2_ino_t ino, struct ext2_inode inode, char *path, vo
 err:
     fclose(contexts);
 end:
-    if (retval)
 #define ERROR_MESSAGE "while getting config for inode %u"
-        retval != -1 ? com_err(__func__, retval, ERROR_MESSAGE, ino)
-                     : fprintf(stderr, "%s: %s" ERROR_MESSAGE, __func__, strerror(errno), ino);
+    if (retval) {
+        if (retval != -1) {
+            fprintf(stderr, "%s: %s" ERROR_MESSAGE, __func__, strerror(errno), ino);
+        } else {
+	    com_err(__func__, retval, ERROR_MESSAGE, ino);
+	}
+    }
 #undef ERROR_MESSAGE
     return retval;
 }
@@ -481,7 +485,6 @@ end:
 int main(int argc, char *argv[])
 {
     int c, show_version_only = 0, ls = 0;
-    char *image = NULL;
     io_manager io_mgr = unix_io_manager;
     errcode_t retval = 0;
     unsigned int b, blocksize = 0;
@@ -543,7 +546,7 @@ int main(int argc, char *argv[])
             usage(EXIT_FAILURE);
         }
 
-        image = in_file = strdup(argv[optind++]);
+        in_file = strdup(argv[optind++]);
 
         if (!ls) {
             if (optind >= argc) {
@@ -552,11 +555,11 @@ int main(int argc, char *argv[])
             }
 
             out_dir = strdup(argv[optind++]);
-
-            if (optind < argc) {
-                fprintf(stderr, "Unexpected argument: %s\n", argv[optind]);
-                usage(EXIT_FAILURE);
-            }
+        }
+	
+	if (optind < argc) {
+            fprintf(stderr, "Unexpected argument: %s\n", argv[optind]);
+            usage(EXIT_FAILURE);
         }
     }
 
@@ -578,59 +581,18 @@ int main(int argc, char *argv[])
     }
 
     if (android_sparse_file) {
-        ext2fs_struct_stat st;
-        int in = open(in_file, O_RDONLY);
-        if (in == -1) {
-            fprintf(stderr, "%s: %s while opening %s\n", prog_name, strerror(errno), in_file);
+        io_mgr = sparse_io_manager;
+        if (asprintf(&in_file, "(%s)", in_file) == -1) {
+            fprintf(stderr, "Failed to allocate file name\n");
             exit(EXIT_FAILURE);
         }
-
-        retval = ext2fs_fstat(in, &st);
-        if (retval) {
-            fprintf(stderr, "%s: %s while stating %s\n", prog_name, strerror(errno), in_file);
-            exit(EXIT_FAILURE);
-        }
-
-        if (st.st_size > SPARSE_MAX_IN_SIZE) {
-            struct sparse_file* s;
-            int new;
-
-            s = sparse_file_import(in, 1, 0);
-            if (!s) {
-                fprintf(stderr, "%s: %s while importing %s\n", prog_name, strerror(errno), in_file);
-                exit(EXIT_FAILURE);
-            }
-
-            new = open(SPARSE_RAW_TEMP_NAME, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-            if (in == -1) {
-                fprintf(stderr, "%s: %s while creating raw %s\n", prog_name, strerror(errno), in_file);
-                exit(EXIT_FAILURE);
-            }
-
-            if (sparse_file_write(s, new, 0, 0, 0) < 0) {
-                fprintf(stderr, "%s: %s while writing raw %s\n", prog_name, strerror(errno), in_file);
-                exit(EXIT_FAILURE);
-            }
-
-            sparse_file_destroy(s);
-            close(new);
-
-            in_file = SPARSE_RAW_TEMP_NAME;
-        } else {
-            io_mgr = sparse_io_manager;
-            if (asprintf(&in_file, "(%s)", in_file) == -1) {
-                fprintf(stderr, "Failed to allocate file name\n");
-                exit(EXIT_FAILURE);
-            }
-        }
-        close(in);
     }
 
     retval = ext2fs_open(in_file, EXT2_FLAG_64BITS | EXT2_FLAG_EXCLUSIVE |
-                                  EXT2_FLAG_THREADS  | EXT2_FLAG_PRINT_PROGRESS, 0, blocksize, io_mgr, &fs);
+                                  EXT2_FLAG_THREADS | EXT2_FLAG_PRINT_PROGRESS, 0, blocksize, io_mgr, &fs);
     if (retval) {
         fputs("\n\n", stderr);
-        com_err(prog_name, retval, "while opening file %s", image);
+        com_err(prog_name, retval, "while opening file %s, try to increase your page/swap file.", in_file);
         exit(EXIT_FAILURE);
     }
 
@@ -659,11 +621,10 @@ end:
         exit(EXIT_FAILURE);
     }
 
-    free(image);
+    free(in_file);
     free(out_dir);
     free(conf_dir);
     free(mountpoint);
-    unlink(SPARSE_RAW_TEMP_NAME);
     remove_error_table(&et_ext2_error_table);
     return EXIT_SUCCESS;
 }

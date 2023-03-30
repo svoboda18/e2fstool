@@ -13,7 +13,7 @@
 #include <private/android_filesystem_capability.h>
 
 #define E2FSTOOL_VERSION "1.0.0"
-#define E2FSTOOL_DATE "22-Sep-2022"
+#define E2FSTOOL_DATE "30-Mar-2023"
 
 #ifdef HAVE_LIB_NT_H
 #include "libnt.h"
@@ -36,12 +36,9 @@
 #endif
 
 #define FILE_MODE_MASK 0x0FFF
-#define FILE_READ_BUFLEN (1 << 16)
+#define FILE_READ_BUFLEN (1 << 26)
 #define RESERVED_INODES_COUNT 0xA /* Excluding EXT2_ROOT_INO */
 #define SYMLINK_I_BLOCK_MAX_SIZE 0x3D
-
-#define SPARSE_RAW_TEMP_NAME ".tmp.img"
-#define SPARSE_MAX_IN_SIZE (1L << 30)
 
 struct inode_params {
     ext2_filsys fs;
